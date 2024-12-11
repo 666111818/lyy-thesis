@@ -14,16 +14,28 @@ contract SmartLock {
     uint256 public lockTimeout = 300;  // 5分钟门锁超时
     mapping(address => uint256) private userUnlockTimes;  // 用户解锁的时间戳
 
+    mapping(address => bool) public managers; // 管理者列表
+
     // 事件：锁定事件
     event Locked();
     // 事件：解锁事件
     event Unlocked(address indexed user);
     // 事件：合约所有者变更
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    // 事件：管理者添加
+    event ManagerAdded(address indexed manager);
+    // 事件：管理者移除
+    event ManagerRemoved(address indexed manager);
 
     // 权限控制：只有合约所有者才能操作
     modifier onlyOwner() {
         require(msg.sender == owner, "Not the contract owner");
+        _;
+    }
+
+    // 权限控制：只有合约所有者或管理者才能操作
+    modifier onlyOwnerOrManager() {
+        require(msg.sender == owner || managers[msg.sender], "Not authorized");
         _;
     }
 
@@ -35,13 +47,26 @@ contract SmartLock {
     }
 
     // 设置门锁的状态为锁定
-    function lock() public onlyOwner {
+    function lock(address user) public {
+        require(
+            msg.sender == owner || managers[msg.sender] || identityOracle.getUserIdentity(user),
+            "Not authorized to lock"
+        );
         isLocked = true;
         emit Locked();
     }
 
-    // 解锁门锁，只有验证通过的用户才能解锁
+    // 解锁门锁，允许用户自己、管理员或owner解锁
     function unlock(address user) public {
+        // 如果是合约所有者或管理员，允许解锁
+        if (msg.sender == owner || managers[msg.sender]) {
+            isLocked = false;
+            userUnlockTimes[user] = block.timestamp;  // 记录用户解锁的时间戳
+            emit Unlocked(user);
+            return;
+        }
+
+        // 如果是用户本人，检查预言机验证
         require(identityOracle.getUserIdentity(user), "User not verified");
         
         uint256 verificationTime = identityOracle.getIdentityTimestamp(user);
@@ -51,6 +76,20 @@ contract SmartLock {
         isLocked = false;
         userUnlockTimes[user] = block.timestamp;  // 记录用户解锁的时间戳
         emit Unlocked(user);
+    }
+
+    // 添加管理者
+    function addManager(address manager) public onlyOwner {
+        require(manager != address(0), "Invalid address");
+        managers[manager] = true;
+        emit ManagerAdded(manager);
+    }
+
+    // 移除管理者
+    function removeManager(address manager) public onlyOwner {
+        require(managers[manager], "Not a manager");
+        managers[manager] = false;
+        emit ManagerRemoved(manager);
     }
 
     // 获取门锁的当前状态
@@ -71,7 +110,7 @@ contract SmartLock {
     }
 
     // 设置门锁超时时间（单位：秒）
-    function setLockTimeout(uint256 timeout) external onlyOwner {
+    function setLockTimeout(uint256 timeout) external onlyOwnerOrManager {
         lockTimeout = timeout;
     }
 }
